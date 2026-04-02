@@ -141,6 +141,9 @@ paths:
       description: |
         Server-Sent Events stream that emits `progress`, `completed`, or `failed` events.
         The stream closes automatically when the job reaches a terminal state.
+
+        A `: heartbeat` comment is sent every 30 seconds to keep the connection alive
+        through proxies and load balancers. SSE clients ignore these automatically.
       operationId: streamJob
       parameters:
       - $ref: '#/components/parameters/JobID'
