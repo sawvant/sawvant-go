@@ -54,6 +54,7 @@ func (c *APIClient) StreamJob(ctx context.Context, jobID string) (<-chan StreamE
 		}
 
 		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024) // 1 MB max token size
 		var currentEvent string
 
 		for scanner.Scan() {
