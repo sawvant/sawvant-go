@@ -20,14 +20,15 @@ type Placement struct {
 	PartId string `json:"part_id"`
 	// Which sheet type this part is placed on
 	SheetId string `json:"sheet_id"`
-	// mm from top-left of usable area
+	// mm from the top-left of the usable area, along the sheet's length axis. x + width never exceeds the usable length.
 	X float64 `json:"x"`
-	// mm from top-left of usable area
+	// mm from the top-left of the usable area, along the sheet's width axis. y + height never exceeds the usable width.
 	Y float64 `json:"y"`
-	// Post-edge-banding dimension
+	// Post-edge-banding dimension along the sheet's length axis
 	Width float64 `json:"width"`
-	// Post-edge-banding dimension
+	// Post-edge-banding dimension along the sheet's width axis
 	Height float64 `json:"height"`
+	// True when the part's length runs along the sheet's width axis, so width is the part's width and height is its length.
 	Rotated bool `json:"rotated"`
 	Grain GrainDirection `json:"grain"`
 }

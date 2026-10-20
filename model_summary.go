@@ -22,6 +22,7 @@ type Summary struct {
 	WastePercent float64 `json:"waste_percent"`
 	// mm²
 	WasteArea float64 `json:"waste_area"`
+	// IDs of parts the solver could not fit on any available sheet. A grain direction that forbids the only orientation that would fit is a common cause, alongside sheet quantity limits. The rest of the plan is still valid and cuttable.
 	UnplacedParts []string `json:"unplaced_parts,omitempty"`
 	SheetsUsed []SheetUsage `json:"sheets_used"`
 }

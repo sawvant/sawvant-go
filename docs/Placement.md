@@ -6,11 +6,11 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **PartId** | **string** |  | 
 **SheetId** | **string** | Which sheet type this part is placed on | 
-**X** | **float64** | mm from top-left of usable area | 
-**Y** | **float64** | mm from top-left of usable area | 
-**Width** | **float64** | Post-edge-banding dimension | 
-**Height** | **float64** | Post-edge-banding dimension | 
-**Rotated** | **bool** |  | 
+**X** | **float64** | mm from the top-left of the usable area, along the sheet&#39;s length axis. x + width never exceeds the usable length. | 
+**Y** | **float64** | mm from the top-left of the usable area, along the sheet&#39;s width axis. y + height never exceeds the usable width. | 
+**Width** | **float64** | Post-edge-banding dimension along the sheet&#39;s length axis | 
+**Height** | **float64** | Post-edge-banding dimension along the sheet&#39;s width axis | 
+**Rotated** | **bool** | True when the part&#39;s length runs along the sheet&#39;s width axis, so width is the part&#39;s width and height is its length. | 
 **Grain** | [**GrainDirection**](GrainDirection.md) |  | 
 
 ## Methods

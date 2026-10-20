@@ -74,26 +74,37 @@ func main() {
 
 ## SSE Streaming
 
-Stream real-time progress events as the job runs:
+Stream real-time progress events as the job runs with `client.StreamJob`. It returns an events channel and an errors channel; both close when the stream ends.
+
+The stream request sends the headers from `cfg.DefaultHeader`, not the API key from the context, so set the key as a default header:
 
 ```go
-events, err := client.JobsApi.StreamJob(ctx, job.GetId()).Execute()
-if err != nil {
-	log.Fatalf("stream job: %v", err)
-}
+cfg := sawvant.NewConfiguration()
+cfg.Host = "api.sawvant.com"
+cfg.AddDefaultHeader("X-API-Key", "sk_your_api_key_here")
+client := sawvant.NewAPIClient(cfg)
+
+events, errs := client.StreamJob(ctx, job.GetJobId())
 
 for event := range events {
 	switch event.Type {
 	case "progress":
-		fmt.Printf("Progress: %v\n", event.Data)
+		fmt.Printf("Progress: %d%%\n", event.Data.GetProgress())
 	case "completed":
-		fmt.Printf("Done: %v\n", event.Data)
-		return
+		fmt.Printf("Done: %v\n", event.Data.GetResult())
 	case "failed":
-		log.Fatalf("job failed: %v", event.Data)
+		log.Fatalf("job failed: %s", event.Data.GetError())
 	}
 }
+
+if err := <-errs; err != nil {
+	log.Fatalf("stream job: %v", err)
+}
 ```
+
+Cancel `ctx` to stop the stream early.
+
+When a `completed` event arrives, the SDK fetches the full job via `GET /v1/jobs/{id}` and puts it in the event, so `event.Data.GetResult()` holds the complete result. The server leaves the result out of stream events to keep them small. Other events are passed on as received.
 
 ## Configuration
 

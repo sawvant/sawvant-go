@@ -8,7 +8,7 @@ Name | Type | Description | Notes
 **YieldPercent** | **float64** |  | 
 **WastePercent** | **float64** |  | 
 **WasteArea** | **float64** | mm² | 
-**UnplacedParts** | Pointer to **[]string** |  | [optional] 
+**UnplacedParts** | Pointer to **[]string** | IDs of parts the solver could not fit on any available sheet. A grain direction that forbids the only orientation that would fit is a common cause, alongside sheet quantity limits. The rest of the plan is still valid and cuttable. | [optional] 
 **SheetsUsed** | [**[]SheetUsage**](SheetUsage.md) |  | 
 
 ## Methods

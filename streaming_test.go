@@ -3,6 +3,8 @@ package sawvant
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,17 +15,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestServer creates an httptest server that handles both the SSE stream
+// endpoint (/v1/jobs/{id}/stream) and the REST job endpoint (/v1/jobs/{id}).
+// sseBody is written as the SSE response; jobResp is returned for GET /v1/jobs/{id}.
+func newTestServer(t *testing.T, jobID string, sseBody string, jobResp *JobResponse) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	streamPath := fmt.Sprintf("/v1/jobs/%s/stream", jobID)
+	jobPath := fmt.Sprintf("/v1/jobs/%s", jobID)
+
+	mux.HandleFunc(streamPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, sseBody)
+	})
+
+	if jobResp != nil {
+		mux.HandleFunc(jobPath, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(jobResp)
+		})
+	}
+
+	return httptest.NewServer(mux)
+}
+
+// completedJobResponse returns a minimal JobResponse for a completed job.
+func completedJobResponse(jobID string) *JobResponse {
+	resp := NewJobResponse(jobID, "completed", 100, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	completed := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	resp.SetCompletedAt(completed)
+	return resp
+}
+
 func TestStreamJob_ParseSSEEvents(t *testing.T) {
 	tests := []struct {
 		name           string
-		responseBody   string
+		sseBody        string
+		jobResp        *JobResponse // non-nil when completed event is expected
 		expectedEvents int
 		expectedTypes  []string
 		wantErr        bool
 	}{
 		{
 			name: "single progress event",
-			responseBody: `event: progress
+			sseBody: `event: progress
 data: {"job_id":"job-1","status":"running","progress":50,"created_at":"2024-01-01T00:00:00Z"}
 `,
 			expectedEvents: 1,
@@ -32,7 +70,7 @@ data: {"job_id":"job-1","status":"running","progress":50,"created_at":"2024-01-0
 		},
 		{
 			name: "multiple events in sequence",
-			responseBody: `event: progress
+			sseBody: `event: progress
 data: {"job_id":"job-1","status":"running","progress":25,"created_at":"2024-01-01T00:00:00Z"}
 
 event: progress
@@ -41,22 +79,24 @@ data: {"job_id":"job-1","status":"running","progress":50,"created_at":"2024-01-0
 event: completed
 data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z"}
 `,
+			jobResp:        completedJobResponse("job-1"),
 			expectedEvents: 3,
 			expectedTypes:  []string{"progress", "progress", "completed"},
 			wantErr:        false,
 		},
 		{
-			name: "event with optional fields",
-			responseBody: `event: completed
+			name: "completed event with optional fields",
+			sseBody: `event: completed
 data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z","completed_at":"2024-01-01T01:00:00Z"}
 `,
+			jobResp:        completedJobResponse("job-1"),
 			expectedEvents: 1,
 			expectedTypes:  []string{"completed"},
 			wantErr:        false,
 		},
 		{
 			name: "error event type",
-			responseBody: `event: error
+			sseBody: `event: error
 data: {"job_id":"job-1","status":"failed","progress":0,"created_at":"2024-01-01T00:00:00Z","error":"Unknown error"}
 `,
 			expectedEvents: 1,
@@ -67,11 +107,7 @@ data: {"job_id":"job-1","status":"failed","progress":0,"created_at":"2024-01-01T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.WriteHeader(http.StatusOK)
-				io.WriteString(w, tt.responseBody)
-			}))
+			server := newTestServer(t, "job-1", tt.sseBody, tt.jobResp)
 			defer server.Close()
 
 			cfg := NewConfiguration()
@@ -87,7 +123,6 @@ data: {"job_id":"job-1","status":"failed","progress":0,"created_at":"2024-01-01T
 				select {
 				case event, ok := <-events:
 					if !ok {
-						// Channel closed
 						goto checkResults
 					}
 					receivedEvents = append(receivedEvents, event)
@@ -96,7 +131,6 @@ data: {"job_id":"job-1","status":"failed","progress":0,"created_at":"2024-01-01T
 						lastErr = err
 					}
 				case <-time.After(2 * time.Second):
-					// Timeout
 					goto checkResults
 				}
 			}
@@ -406,14 +440,68 @@ checkResults:
 	assert.Equal(t, "text/event-stream", acceptHeader)
 }
 
+// TestStreamJob_CompletedFetchesFullResult verifies that when a "completed" SSE
+// event is received (without a Result field), the SDK fetches the full job via
+// GET /v1/jobs/{id} and delivers the complete JobResponse to the caller.
+func TestStreamJob_CompletedFetchesFullResult(t *testing.T) {
+	jobResp := completedJobResponse("job-1")
+	jobResp.SetWarnings([]string{"unplaced-part-1", "unplaced-part-2"})
+
+	// The SSE event intentionally omits the Result field — matching backend behaviour.
+	server := newTestServer(t, "job-1",
+		`event: completed
+data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z","completed_at":"2024-01-02T00:00:00Z"}
+`,
+		jobResp,
+	)
+	defer server.Close()
+
+	cfg := NewConfiguration()
+	cfg.Servers[0].URL = server.URL
+	cfg.HTTPClient = http.DefaultClient
+
+	client := NewAPIClient(cfg)
+	events, errs := client.StreamJob(context.Background(), "job-1")
+
+	var receivedEvent *StreamEvent
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				goto checkResults
+			}
+			receivedEvent = &event
+		case err := <-errs:
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			goto checkResults
+		}
+	}
+
+checkResults:
+	require.NotNil(t, receivedEvent)
+	assert.Equal(t, "completed", receivedEvent.Type)
+	assert.Equal(t, "job-1", receivedEvent.Data.JobId)
+	assert.Equal(t, int32(100), receivedEvent.Data.Progress)
+	assert.Equal(t, "completed", receivedEvent.Data.Status)
+	assert.Equal(t, 2, len(receivedEvent.Data.Warnings))
+	assert.Contains(t, receivedEvent.Data.Warnings, "unplaced-part-1")
+}
+
+// TestStreamJob_EventDataDeserialization tests that fields from the full REST
+// response are correctly surfaced after the SDK fetches the completed job.
 func TestStreamJob_EventDataDeserialization(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `event: completed
-data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z","completed_at":"2024-01-02T00:00:00Z","warnings":["unplaced-part-1","unplaced-part-2"]}
-`)
-	}))
+	jobResp := completedJobResponse("job-1")
+	jobResp.SetWarnings([]string{"unplaced-part-1", "unplaced-part-2"})
+
+	server := newTestServer(t, "job-1",
+		`event: completed
+data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z","completed_at":"2024-01-02T00:00:00Z"}
+`,
+		jobResp,
+	)
 	defer server.Close()
 
 	cfg := NewConfiguration()
@@ -522,13 +610,14 @@ checkResults:
 }
 
 func TestStreamJob_ChannelsClosed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `event: completed
+	jobResp := completedJobResponse("job-1")
+
+	server := newTestServer(t, "job-1",
+		`event: completed
 data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z"}
-`)
-	}))
+`,
+		jobResp,
+	)
 	defer server.Close()
 
 	cfg := NewConfiguration()
@@ -628,4 +717,57 @@ func TestStreamJob_MultipleErrorsReturnsFirst(t *testing.T) {
 	}
 
 	assert.NotNil(t, receivedErr)
+}
+
+// TestStreamJob_CompletedRestFetchFails verifies that an error fetching the
+// full job via REST after a "completed" SSE event propagates correctly.
+func TestStreamJob_CompletedRestFetchFails(t *testing.T) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/v1/jobs/job-1/stream", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `event: completed
+data: {"job_id":"job-1","status":"completed","progress":100,"created_at":"2024-01-01T00:00:00Z"}
+`)
+	})
+
+	// REST endpoint returns 500 to simulate a failure
+	mux.HandleFunc("/v1/jobs/job-1", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	cfg := NewConfiguration()
+	cfg.Servers[0].URL = server.URL
+	cfg.HTTPClient = http.DefaultClient
+
+	client := NewAPIClient(cfg)
+	events, errs := client.StreamJob(context.Background(), "job-1")
+
+	var lastErr error
+	var eventCount int
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				goto checkResults
+			}
+			eventCount++
+			_ = event
+		case err := <-errs:
+			if err != nil {
+				lastErr = err
+			}
+		case <-time.After(2 * time.Second):
+			goto checkResults
+		}
+	}
+
+checkResults:
+	assert.Error(t, lastErr, "should return an error when REST fetch fails")
+	assert.Contains(t, lastErr.Error(), "failed to fetch completed job result")
+	assert.Equal(t, 0, eventCount, "no events should be delivered when REST fetch fails")
 }

@@ -36,6 +36,34 @@ func Test_sawvant_JobsAPIService(t *testing.T) {
 
 	})
 
+	t.Run("Test JobsAPIService GetJobDiagramPDF", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var id string
+
+		resp, httpRes, err := apiClient.JobsAPI.GetJobDiagramPDF(context.Background(), id).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
+	t.Run("Test JobsAPIService GetJobDiagramSVG", func(t *testing.T) {
+
+		t.Skip("skip test")  // remove to run test
+
+		var id string
+
+		resp, httpRes, err := apiClient.JobsAPI.GetJobDiagramSVG(context.Background(), id).Execute()
+
+		require.Nil(t, err)
+		require.NotNil(t, resp)
+		assert.Equal(t, 200, httpRes.StatusCode)
+
+	})
+
 	t.Run("Test JobsAPIService StreamJob", func(t *testing.T) {
 
 		t.Skip("skip test")  // remove to run test
